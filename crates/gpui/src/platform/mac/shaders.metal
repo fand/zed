@@ -57,9 +57,257 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
+#define EPS 1e-3
+#define BPM 138.
+#define phase ((60. / BPM) * 4.)
+#define phaseCount 4.
+#define TIME_OFFSET 0.0
+
+struct AppCtx {
+    float time;
+    float modetime;
+    float light;
+    float lightK;
+};
+
+float2x2 rot(float t) {
+    float c = cos(t), s = sin(t);
+    return float2x2(c, -s, s, c);
+}
+
+float sdTunnel(float3 p, thread AppCtx *ctx) {
+    float t = ctx->time;
+    p.xy *= .5;
+    p.z -= ctx->time * .3;
+
+    p.xy *= 1. + (
+        cos((p.z * 7. + p.x + 7. + p.y * 5.) - t * 2.) *
+        cos((p.z * -2. + + p.x * 0.5 + p.y * -6.) - t * 2.) *
+        cos((p.z * 3. + + p.x * 2.1 + p.y * -3.7) - t * 1.3) *
+        cos((p.z * -.9 + + p.x * 1.7 + p.y * 8.7) - t * .9)
+    ) * 0.2;
+
+
+    return 1. - length(p.xy);
+}
+
+float sdTorus(float3 p, float2 r) {
+    return length(float2(length(p.xy) - r.y, p.z)) - r.x;
+}
+
+float sdBox(float3 p, float3 b) {
+    float3 q = abs(p) - b;
+    return length(max(q, 0.)) - min(max(max(q.x, q.y), q.z), 0.);
+}
+float sdSphere(float3 p, float r) {
+    return length(p) - r;
+}
+
+float sdZed(float3 p) {
+    float d = 999.;
+
+    p *= 1.4;
+
+    // Z
+    float3 pp = p - float3(1.5, 0, 0);
+    d = min(d, sdBox(pp + float3(0, 0.5, 0), float3(.5, .1, .1)));
+    d = min(d, sdBox(pp + float3(0, -.5, 0), float3(.5, .1, .1)));
+    pp.xy = pp.xy * rot(-3.14 / 4.);
+    d = min(d, sdBox(pp, float3(.6, .1, .1)));
+
+    // E
+    pp = p;
+    d = min(d, sdBox(pp + float3(0, 0.5, 0), float3(.5, .1, .1)));
+    d = min(d, sdBox(pp + float3(0, 0.0, 0), float3(.5, .1, .1)));
+    d = min(d, sdBox(pp + float3(0, -.5, 0), float3(.5, .1, .1)));
+    d = min(d, sdBox(pp + float3(-.5, 0, 0), float3(.1, .6, .1)));
+
+    // D
+    pp = p + float3(1.5, 0, 0);
+    d = min(d, sdBox(pp + float3(-.1, 0.5, 0), float3(.25, .1, .1)));
+    d = min(d, sdBox(pp + float3(-.1, -.5, 0), float3(.25, .1, .1)));
+    d = min(d, sdBox(pp + float3(-.5, 0, 0), float3(.1, .6, .1)));
+    d = min(d, sdBox(pp + float3(.5, .0, 0), float3(.1, .2, .1)));
+    pp.xy = pp.xy * rot(3.14 / 4.);
+    d = min(d, sdBox(pp + float3(.45, 0, 0), float3(.1, .3, .1)));
+    d = min(d, sdBox(pp + float3(0, .45, 0), float3(.3, .1, .1)));
+
+    return d /= 1.4;
+}
+
+
+float sdLight(float3 p, thread AppCtx *c) {
+    // p.xy = p.xy * rot(sin(c->time * .7 + 2.) * 1.);
+    p.xz = p.xz * rot(c->time * 1.2 + 3.);
+
+    // mode change noise
+    float change = smoothstep(.07, 0., c->modetime / phase) + smoothstep(.93, 1., c->modetime / phase);
+    p += float3(
+        sin(p.y * 3.7 + c->time) * sin(p.y * 17. + c->time) * sin(p.y * 29. - c->time * .7),
+        sin(p.x * 5.1 + c->time) * sin(p.y * 13. + c->time) * sin(p.y * 23. - c->time * .6),
+        0
+    ) * change;
+
+    float d;
+    float mode = floor(fmod(c->time,  phase * phaseCount) / phase);
+    if (mode == 0.) {
+        // Double ring
+        float3 q = p;
+        p.x += .23;
+        q.xy -= .1;
+        q.xy = q.xy * rot(5.);
+        q.xz = q.xz * rot(5. + sin(c->time + 2.) * .1);
+        float2 r = float2(0.001, .8);
+        // d = min(sdTorus(p, r), sdTorus(q, r));
+    } else if (mode == 1.) {
+        // Cross
+        float x = 0.02 * (.3 + 1. * abs(sin(p.y)));
+
+        p.x += .2;
+        // d = sdBox(p, float3(x, x, .8));
+
+        p.xy -= .1;
+        p.xy = p.xy * rot(1.);
+        // d = min(d, sdBox(p, float3(x, .9, x)));
+
+        p.xy = p.xy * rot(3.);
+        // d = min(d, sdBox(p, float3(.4, x, x)));
+    } else if (mode == 2.) {
+        // Twist
+        p.xz = p.xz * rot(p.y * 1.2);
+        float a = atan2(p.y, p.x);
+        p.xy *= 1.1 + sin(a * 3.) * .2;
+        // d = sdTorus(p, float2(0.02, 1.));
+    } else {
+        // spheres
+        float r = .3;
+        float r2 = .14;
+        // d = sdSphere(p + float3(1) * r, r2);
+        // d = min(d, sdSphere(p + float3(1, -1, -1) * r, r2));
+        // d = min(d, sdSphere(p + float3(-1, 1, -1) * r, r2));
+        // d = min(d, sdSphere(p + float3(-1, -1, 1) * r, r2));
+    }
+    d = sdZed(p);
+
+    return d;
+}
+
+float2 map(float3 p, thread AppCtx *ctx) {
+    float d1 = sdTunnel(p, ctx);
+
+    float d2 = sdLight(p, ctx);
+    float glow = .015 / d2;
+
+    float wall = exp(d2 * -1.) * smoothstep(0., 2., length(p)) * .03; // add light for walls
+    ctx->light += (glow + wall) * .84;
+
+    return d1 < d2 ? float2(d1, 1) : float2(d2, 2);
+}
+
+float3 getNormal(float3 p, thread AppCtx *c) {
+    float2 d = float2(0, 0.001);
+    return normalize(float3(
+        (map(p + d.yxx, c) - map(p - d.yxx, c)).x,
+        (map(p + d.xyx, c) - map(p - d.xyx, c)).x,
+        (map(p + d.xxy, c) - map(p - d.xxy, c)).x
+    ));
+}
+
+float noise(float t) {
+    return sin(t * 3.) * sin (t  * 7.1) * sin(t * 19.3) * sin(t * 37.9);
+}
+float hash(float2 p) {
+    return fract(sin(dot(p, float2(3483., 4881.))) *348.);
+}
+
+float3 amagi(float2 uv, float2 size, float time) {
+    float2 p = uv * 2. - 1.;
+    p.x *= size.x / size.y;
+
+    float l = length(p);
+
+    p *= 1. + pow(l, 2.) * 0.2; // distort
+
+    // update globals
+    AppCtx ctx;
+    ctx.time = time + TIME_OFFSET;
+    ctx.modetime = fmod(time, phase);
+    ctx.lightK = .7 + noise(time) * 0.3;
+    ctx.light = 0.0;
+
+    // bokeh
+    p += float2(hash(p + time), hash(p + time + 2.)) * smoothstep(.4, 8., l);
+
+    // camera wiggle
+    float3 ro = float3(0, 0, 2.2);
+    ro.xy += float2(
+        noise(time * .07 + 3.),
+        noise(time * .03 + 7.)
+    ) * .17;
+
+    // define ray
+    float3 rt = float3(0);
+    float3 cf = normalize(ro - rt);
+    float3 cu = float3(0, 1, 0);
+    float3 cr = cross(cf, cu);
+    float3 rd = normalize(p.x * cr + p.y * cu + -1. * cf);
+
+    float3 rp = float3(0);
+    float t = 0.0, fi = 0.0;
+    float2 hit = float2(0);
+
+    for (int i = 0; i < 99; i++) {
+        rp = ro + rd * t;
+        hit = map(rp, &ctx);
+
+        if (hit.x < EPS) {
+            fi = float(i);
+            break;
+        }
+        t += hit.x * .7;
+    }
+
+    float3 col = float3(0);
+    float3 ld = normalize(float3(2,3,1));
+    float3 ld2 = normalize(float3(-1,-3,1));
+    float3 ld3 = normalize(float3(-5,-2,0));
+    float3 n = getNormal(rp, &ctx);
+    if (hit.y == 1.) {
+        col += .8 * (
+            pow(max(0., dot(n, ld)), 110.) +
+            pow(max(0., dot(n, ld2)), 210.) +
+            pow(max(0., dot(n, ld3)), 310.)
+        ) * ctx.lightK;
+        col *= 0.;
+
+        float3 ldd = normalize(-rp);
+
+        col += .3 * pow(max(0., dot(n, ldd)), 300.) * ctx.lightK; // diffuse
+        col += .5 * pow(max(0., dot(n, normalize(ldd - rd))), 30.) * ctx.lightK; // specular
+
+        col += .3; // amb
+
+        col += ctx.light * ctx.lightK;
+        col -= .003 * fi; // AO
+        col -= .2 * pow(t, .7);  // dark fog
+    } else if (hit.y == 2.) {
+        col += ctx.lightK * 2.;
+    }
+
+    // Vignette
+    col -= pow(length(p), 2.) * .1;
+
+    // colorize
+    col.r = smoothstep(-.1, 1., col.r);
+    col.b = smoothstep(.0, .6, col.b);
+
+    return col;
+}
+
 fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
-                              [[buffer(QuadInputIndex_Quads)]]) {
+                              [[buffer(QuadInputIndex_Quads)]],
+                              constant float *time [[buffer(QuadInputIndex_Time)]]) {
   Quad quad = quads[input.quad_id];
   float2 half_size =
       float2(quad.bounds.size.width, quad.bounds.size.height) / 2.;
@@ -114,6 +362,11 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
     float4 blended_border = over(input.background_color, input.border_color);
     color = mix(blended_border, input.background_color,
                 saturate(0.5 - inset_distance));
+  }
+
+  if (half_size.x >= 300. && half_size.y >= 300.) {
+    float2 uv = center_to_point / half_size * 0.5 + 0.5;
+    return float4(amagi(uv, half_size * 2., *time), saturate(0.5 - distance));
   }
 
   return color * float4(1., 1., 1., saturate(0.5 - distance));

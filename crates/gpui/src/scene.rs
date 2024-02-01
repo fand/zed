@@ -503,6 +503,20 @@ pub(crate) enum PrimitiveBatch<'a> {
     Surfaces(&'a [Surface]),
 }
 
+impl PrimitiveBatch<'_> {
+    pub fn name(&self) -> &'static str {
+        match self {
+            PrimitiveBatch::Shadows(_) => "Shadows",
+            PrimitiveBatch::Quads(_) => "Quads",
+            PrimitiveBatch::Paths(_) => "Paths",
+            PrimitiveBatch::Underlines(_) => "Underlines",
+            PrimitiveBatch::MonochromeSprites { .. } => "MonochromeSprites",
+            PrimitiveBatch::PolychromeSprites { .. } => "PolychromeSprites",
+            PrimitiveBatch::Surfaces(_) => "Surfaces",
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 #[repr(C)]
 pub(crate) struct Quad {

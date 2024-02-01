@@ -15,7 +15,12 @@ use media::core_video::CVMetalTextureCache;
 use metal::{CommandQueue, MTLPixelFormat, MTLResourceOptions, NSRange};
 use objc::{self, msg_send, sel, sel_impl};
 use smallvec::SmallVec;
-use std::{ffi::c_void, mem, ptr, sync::Arc};
+use std::{
+    ffi::c_void,
+    mem, ptr,
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(not(feature = "runtime_shaders"))]
 const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders.metallib"));
@@ -39,6 +44,7 @@ pub(crate) struct MetalRenderer {
     instances: metal::Buffer,
     sprite_atlas: Arc<MetalAtlas>,
     core_video_texture_cache: CVMetalTextureCache,
+    start_time: Instant,
 }
 
 impl MetalRenderer {
@@ -181,6 +187,7 @@ impl MetalRenderer {
             instances,
             sprite_atlas,
             core_video_texture_cache: unsafe { CVMetalTextureCache::new(device.as_ptr()).unwrap() },
+            start_time: Instant::now(),
         }
     }
 
@@ -497,6 +504,13 @@ impl MetalRenderer {
             QuadInputIndex::ViewportSize as u64,
             mem::size_of_val(&viewport_size) as u64,
             &viewport_size as *const Size<DevicePixels> as *const _,
+        );
+
+        let time = Instant::now().duration_since(self.start_time).as_secs_f32();
+        command_encoder.set_fragment_bytes(
+            QuadInputIndex::Time as u64,
+            mem::size_of_val(&time) as u64,
+            &time as *const f32 as *const _,
         );
 
         let quad_bytes_len = mem::size_of_val(quads);
@@ -1018,6 +1032,7 @@ enum QuadInputIndex {
     Vertices = 0,
     Quads = 1,
     ViewportSize = 2,
+    Time = 3,
 }
 
 #[repr(C)]
